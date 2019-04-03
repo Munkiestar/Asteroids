@@ -13,6 +13,10 @@ const SHOW_CENTRE_DOT = false; // show or hide ship's centre dot
 const SHIP_EXPLODE_DUR = .3; // duration of ship's explosion
 const SHIP_INV_DUR = 3; // duration of ship's invisibility in seconds
 const SHIP_BLINK_DURATION = 0.1; // duration of ship's blind during invisibility in seconds
+const LASER_MAX = 10; // macimium number of lasers on screen at once
+const LASER_SPD = 500; // speed of lasers in pixels per second
+const LASER_DIST = 0.6; // max distance laser can travel as fraction of screen width
+const LASER_EXPLODE_DUR = 0.1; // duration of the lasers' explosion in seconds
 
 //===================================================================================
 
@@ -46,10 +50,28 @@ function createAsteroidBelt(){
 			y = Math.floor(Math.random() * canvas.height);
 		} while(distBetweenPoints(ship.x, ship.y, x, y) < ROIDS_SIZE * 2 + ship.r);
 		
-		roids.push(newAsteroid(x, y));
+		roids.push(newAsteroid(x, y, Math.ceil(ROIDS_SIZE / 2)));
+	}
+}
+ 
+function destroyAsteroid(index){
+	var x = roids[index].x;
+	var y = roids[index].y;
+	var r = roids[index].r;
+
+	// split the asteroid in two if necessary
+	if(r == Math.ceil(ROIDS_SIZE / 2)){
+		roids.push(newAsteroid(x, y, Math.ceil(ROIDS_SIZE / 4)));
+		roids.push(newAsteroid(x, y, Math.ceil(ROIDS_SIZE / 4)));
+	} else if(r == Math.ceil(ROIDS_SIZE / 4)){
+		roids.push(newAsteroid(x, y, Math.ceil(ROIDS_SIZE / 8)));
+		roids.push(newAsteroid(x, y, Math.ceil(ROIDS_SIZE / 8)));
 	}
 
-}
+	// destroy the asteroid
+	roids.splice(index, 1);
+} 
+
 
 function distBetweenPoints(x1, y1, x2, y2){
 	return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
@@ -72,7 +94,11 @@ function keyDown(e){
 
 		case 39: // right arrow - rotate right
 			ship.rot = - TURN_SPEED / 180 * Math.PI / FPS;
-			break;		
+			break;	
+
+		case 32: // space bar - for shooting	
+			shootLaser();
+			break;
 	}
 }
 
@@ -89,17 +115,21 @@ function keyUp(e){
 		case 39: // right arrow - STOP rotate right
 			ship.rot = 0;
 			break;		
+
+		case 32: // space bar (allow shooting agin)
+			ship.canShoot = true;
+			break;	
 	}
 }
 
 
-function newAsteroid(x, y){
+function newAsteroid(x, y, r){
 	var roid = {
 		x: x,
 		y: y,
 		xv: Math.random() * ROIDS_SPD / FPS * (Math.random() < 0.5 ? 1 : -1), // x velocity * roids speed
 		yv: Math.random() * ROIDS_SPD / FPS * (Math.random() < 0.5 ? 1 : -1),
-		r: ROIDS_SIZE / 2,
+		r: r,
 		a: Math.random() * Math.PI * 2, // random angle 360* in radians
 		vert: Math.floor(Math.random() * (ROIDS_VERT + 1) + ROIDS_VERT / 2),
 		offs: []
@@ -121,7 +151,9 @@ function newShip(){
 		a: 90 / 180 * Math.PI, // convert to radians
 		blinkTime: Math.ceil(SHIP_BLINK_DURATION * FPS),
 		blinkNum: Math.ceil(SHIP_INV_DUR / SHIP_BLINK_DURATION),
+		canShoot: true,
 		explodeTime: 0,
+		lasers: [],
 		rot: 0,
 		thrusting: false,
 		thrust: {
@@ -129,6 +161,23 @@ function newShip(){
 			y: 0
 		}
 	}
+}
+
+function shootLaser(){
+	// create the laser object
+	if(ship.canShoot && ship.lasers.length < LASER_MAX){
+		ship.lasers.push({ // from the nose of the ship
+			x: ship.x + 4/3 * ship.r * Math.cos(ship.a),
+			y: ship.y - 4/3 * ship.r * Math.sin(ship.a),
+			xv: LASER_SPD * Math.cos(ship.a) /  FPS,
+			yv: - LASER_SPD * Math.sin(ship.a) / FPS,
+			dist: 0,
+			explodeTime: 0
+		});
+	}
+
+	// prevent further shooting
+	ship.canShoot = false;
 }
 
 
@@ -249,7 +298,6 @@ function update(){
 
 
 		// draw the asteroids
-		
 		var x, y, r, a, vert, offs;
 		for(var i = 0; i < roids.length; i++){
 			ctx.strokeStyle = 'slategray';
@@ -290,13 +338,68 @@ function update(){
 				ctx.stroke();
 			}
 		}
+
+		// draw the lasers
+		for(var i = 0; i < ship.lasers.length; i++){
+			if(ship.lasers[i].explodeTime == 0){
+				ctx.fillStyle = 'salmon';
+				ctx.beginPath();
+				ctx.arc(ship.lasers[i].x, ship.lasers[i].y, SHIP_SIZE / 15, 0, Math.PI * 2, false);
+				ctx.fill();
+			} else{
+				// draw the explosion
+				ctx.fillStyle = 'orangred';
+				ctx.beginPath();
+				ctx.arc(ship.lasers[i].x, ship.lasers[i].y, ship.r * 0.75, 0, Math.PI * 2, false);
+				ctx.fill();
+				ctx.fillStyle = 'salmon';
+				ctx.beginPath();
+				ctx.arc(ship.lasers[i].x, ship.lasers[i].y, ship.r * 0.55, 0, Math.PI * 2, false);
+				ctx.fill();
+				ctx.fillStyle = 'pink';
+				ctx.beginPath();
+				ctx.arc(ship.lasers[i].x, ship.lasers[i].y, ship.r * 0.25, 0, Math.PI * 2, false);
+				ctx.fill();
+			}
+			
+		}
+
+		// detect laser hits on asteroids
+		// asteroid x and y and radius... laser x and y
+		var ax, ay, ar, lx, ly;
+		for(var i = roids.length - 1; i >= 0; i --){
+			// grab the asteroid properties
+			ax = roids[i].x;
+			ay = roids[i].y;
+			ar = roids[i].r;
+
+			// loop over the lasers
+			for(var j = ship.lasers.length - 1; j >= 0; j--){
+				// grab the laser properties
+				lx = ship.lasers[j].x;
+				ly = ship.lasers[j].y;
+
+				// detect hits
+				if(ship.lasers[j].explodeTime == 0 && distBetweenPoints(ax, ay, lx, ly) < ar){
+					
+
+					// destroy the asteroid and activate laser explosion
+					destroyAsteroid(i);
+					ship.lasers[j].explodeTime = Math.ceil(LASER_EXPLODE_DUR * FPS);
+					break;
+				}
+			}
+		}
+
 		
-		// check for asteroid collisions
+		// check for asteroid collisions (when not exploding)
 		if(!exploding){ // we don't wanna move, rotate and check for collision
 			if(ship.blinkNum == 0){ // if we're not currently blinking
 				for(var i = 0; i < roids.length; i++){
 					if(distBetweenPoints(ship.x, ship.y, roids[i].x, roids[i].y) < ship.r + roids[i].r){
 						explodeShip();
+						destroyAsteroid(i);
+						break;
 					}
 				}
 			}
@@ -334,6 +437,49 @@ function update(){
 		}
 
 
+		// move the lasers
+		for(var i = ship.lasers.length - 1; i >= 0; i--){
+			// check distance travelled
+			if(ship.lasers[i].dist > LASER_DIST * canvas.width){
+				ship.lasers.splice(i, 1);
+				continue;
+			}
+
+			// handle the explosion
+			if(ship.lasers[i].explodeTime > 0){ // curently exploding
+				ship.lasers[i].explodeTime--;
+
+				// destroy the laser after the duration is up
+				if(ship.lasers[i].explodeTime == 0){
+					ship.lasers.splice(i, 1);
+					continue;
+				}
+			} else{
+				// move the laser
+				ship.lasers[i].x += ship.lasers[i].xv;
+				ship.lasers[i].y += ship.lasers[i].yv;
+
+				// calculate the distance travelled
+				ship.lasers[i].dist += Math.sqrt(Math.pow(ship.lasers[i].xv, 2) + Math.pow(ship.lasers[i].yv, 2));
+			}
+
+
+			
+
+			// handle edge of screen
+			if(ship.lasers[i].x < 0){
+				ship.lasers[i].x = canvas.width;
+			} else if(ship.lasers[i].x > canvas.width){
+				ship.lasers[i].x = 0;
+			}
+			if(ship.lasers[i].y < 0){
+				ship.lasers[i].y = canvas.height;
+			} else if(ship.lasers[i].y > canvas.height){
+				ship.lasers[i].y = 0;
+			}
+		}
+
+
 		// move the asteroid
 		for(var i = 0; i < roids.length; i++){
 			roids[i].x += roids[i].xv;
@@ -360,34 +506,4 @@ function update(){
 		}
 		
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
